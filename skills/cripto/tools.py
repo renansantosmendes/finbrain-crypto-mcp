@@ -1,15 +1,38 @@
+from typing import Annotated
+
 import ccxt
 import pandas as pd
 from langchain_core.tools import tool
 
 
 @tool
-def get_crypto_price(exchange_name: str, symbol: str) -> str:
-    """Busca o preço atual (ticker) de uma criptomoeda em uma exchange específica.
+def get_crypto_price(
+    exchange_name: Annotated[str, "Lowercase ccxt exchange id, for example 'binance', 'coinbase' or 'kraken'."],
+    symbol: Annotated[str, "Trading pair in BASE/QUOTE format, for example 'BTC/USDT' or 'ETH/USD'."],
+) -> str:
+    """Fetch the current ticker of a cryptocurrency pair on one exchange.
 
-    Args:
-        exchange_name: nome da exchange em minúsculas (ex: "binance", "coinbase", "kraken").
-        symbol: par de negociação no formato "BASE/QUOTE" (ex: "BTC/USDT", "ETH/USD").
+    Returns the last price, the 24-hour high and low, the 24-hour percentage
+    change and the 24-hour base volume. Use it for "what is the price of X",
+    not for history (see get_crypto_ohlcv).
+
+    Parameters
+    ----------
+    exchange_name : str
+        Lowercase ccxt exchange id.
+    symbol : str
+        Trading pair in BASE/QUOTE format.
+
+    Returns
+    -------
+    str
+        Human-readable summary of the ticker, in Portuguese. On failure, a
+        message starting with "Erro ao buscar" that carries the error.
+
+    Example
+    -------
+    >>> get_crypto_price.invoke({"exchange_name": "binance", "symbol": "BTC/USDT"})  # doctest: +SKIP
+    'BTC/USDT na binance:\\n- Último preço: ...'
     """
     try:
         exchange = getattr(ccxt, exchange_name)()
@@ -28,14 +51,37 @@ def get_crypto_price(exchange_name: str, symbol: str) -> str:
 
 
 @tool
-def get_crypto_ohlcv(exchange_name: str, symbol: str, timeframe: str = "1d", limit: int = 10) -> str:
-    """Busca o histórico de candles (OHLCV) de uma criptomoeda.
+def get_crypto_ohlcv(
+    exchange_name: Annotated[str, "Lowercase ccxt exchange id, for example 'binance'."],
+    symbol: Annotated[str, "Trading pair in BASE/QUOTE format, for example 'BTC/USDT'."],
+    timeframe: Annotated[str, "Candle interval, for example '1m', '1h', '1d' or '1w'."] = "1d",
+    limit: Annotated[int, "Number of most recent candles to return."] = 10,
+) -> str:
+    """Fetch the OHLCV candle history of a cryptocurrency pair.
 
-    Args:
-        exchange_name: nome da exchange (ex: "binance").
-        symbol: par de negociação (ex: "BTC/USDT").
-        timeframe: intervalo do candle. Valores comuns: "1m", "1h", "1d", "1w".
-        limit: quantidade de candles mais recentes a retornar.
+    Each row holds the candle timestamp (UTC), open, high, low, close and
+    volume. Use it for price history and trends.
+
+    Parameters
+    ----------
+    exchange_name : str
+        Lowercase ccxt exchange id.
+    symbol : str
+        Trading pair in BASE/QUOTE format.
+    timeframe : str
+        Candle interval.
+    limit : int
+        Number of most recent candles.
+
+    Returns
+    -------
+    str
+        Table of the candles as text. On failure, a message starting with
+        "Erro ao buscar OHLCV" that carries the error.
+
+    Example
+    -------
+    >>> get_crypto_ohlcv.invoke({"exchange_name": "binance", "symbol": "BTC/USDT", "limit": 3})  # doctest: +SKIP
     """
     try:
         exchange = getattr(ccxt, exchange_name)()
@@ -49,13 +95,35 @@ def get_crypto_ohlcv(exchange_name: str, symbol: str, timeframe: str = "1d", lim
 
 
 @tool
-def get_crypto_order_book(exchange_name: str, symbol: str, limit: int = 5) -> str:
-    """Busca o livro de ofertas (order book) de uma criptomoeda: melhores preços de compra e venda.
+def get_crypto_order_book(
+    exchange_name: Annotated[str, "Lowercase ccxt exchange id, for example 'binance'."],
+    symbol: Annotated[str, "Trading pair in BASE/QUOTE format, for example 'BTC/USDT'."],
+    limit: Annotated[int, "Number of price levels to return on each side of the book."] = 5,
+) -> str:
+    """Fetch the order book of a cryptocurrency pair.
 
-    Args:
-        exchange_name: nome da exchange (ex: "binance").
-        symbol: par de negociação (ex: "BTC/USDT").
-        limit: quantidade de níveis de preço a retornar de cada lado.
+    Reports the best bid (highest buy offer), the best ask (lowest sell offer),
+    their spread, and the top price levels on each side. Use it for liquidity
+    and spread questions.
+
+    Parameters
+    ----------
+    exchange_name : str
+        Lowercase ccxt exchange id.
+    symbol : str
+        Trading pair in BASE/QUOTE format.
+    limit : int
+        Number of price levels per side.
+
+    Returns
+    -------
+    str
+        Summary of the order book, in Portuguese. On failure, a message
+        starting with "Erro ao buscar order book" that carries the error.
+
+    Example
+    -------
+    >>> get_crypto_order_book.invoke({"exchange_name": "binance", "symbol": "BTC/USDT"})  # doctest: +SKIP
     """
     try:
         exchange = getattr(ccxt, exchange_name)()
@@ -79,5 +147,14 @@ def get_crypto_order_book(exchange_name: str, symbol: str, limit: int = 5) -> st
 
 @tool
 def list_available_exchanges() -> str:
-    """Lista as exchanges de criptomoedas suportadas pela biblioteca ccxt."""
+    """List the cryptocurrency exchanges supported by the ccxt library.
+
+    Use it to find valid values for exchange_name before calling the other
+    crypto tools. Takes no arguments.
+
+    Returns
+    -------
+    str
+        Comma-separated list of ccxt exchange ids.
+    """
     return ", ".join(ccxt.exchanges)
