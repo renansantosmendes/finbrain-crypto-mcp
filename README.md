@@ -1,81 +1,155 @@
 # FinBrain Crypto MCP
 
-Servidor **MCP (Model Context Protocol)** que expõe as ferramentas de criptomoedas
-do FinBrain: preço, candles (OHLCV), order book e lista de exchanges, via
-[`ccxt`](https://github.com/ccxt/ccxt) em múltiplas exchanges.
+An **MCP (Model Context Protocol)** server that exposes the FinBrain
+cryptocurrency tools: current price, OHLCV candles, order book and the list of
+supported exchanges. Market data is read through
+[`ccxt`](https://github.com/ccxt/ccxt), which supports many exchanges.
 
-Foi separado do `finbrain-mcp` porque a dependência `ccxt` (com `uvloop`,
-`aiohttp` e outras) não cabe no deploy do Vercel.
+It was split out of `finbrain-mcp` because the `ccxt` dependency (with
+`uvloop`, `aiohttp` and others) does not fit in the Vercel deployment.
 
-## Ferramentas
+## Contents
 
-| Tool | O que faz |
+- [Overview](#overview)
+- [Tools](#tools)
+- [Authentication](#authentication)
+- [API documentation](#api-documentation-swagger)
+- [Environment variables](#environment-variables)
+- [Running locally](#running-locally)
+- [Testing](#testing)
+- [Deployment](#deployment)
+- [Repository layout](#repository-layout)
+
+## Overview
+
+```mermaid
+flowchart LR
+    agent["FinBrain agent<br/>(MCP client)"]
+    subgraph vercel["Vercel: finbrain-crypto-mcp"]
+        app["FastAPI app<br/>api/index.py"]
+        mcp["POST /mcp<br/>JSON-RPC, Streamable HTTP"]
+        tools["Crypto tools<br/>skills/cripto/tools.py"]
+    end
+    auth["auth_service<br/>JWKS endpoint"]
+    exchanges["Public exchange APIs<br/>via ccxt"]
+
+    agent -->|"Bearer access token"| mcp
+    app --> mcp --> tools
+    mcp -.->|"verify token signature<br/>(only when JWKS is set)"| auth
+    tools -->|"public market data"| exchanges
+```
+
+## Tools
+
+| Tool | What it does |
 |---|---|
-| `get_crypto_price` | Preço atual (ticker), máxima/mínima e variação 24h de um par em uma exchange. |
-| `get_crypto_ohlcv` | Histórico de candles (abertura, máxima, mínima, fechamento, volume). |
-| `get_crypto_order_book` | Melhores preços de compra e venda, spread e níveis do livro de ofertas. |
-| `list_available_exchanges` | Lista as exchanges suportadas pelo `ccxt`. |
+| `get_crypto_price` | Current price (ticker), high and low, and 24h change for a pair on one exchange. |
+| `get_crypto_ohlcv` | Candle history (open, high, low, close, volume). |
+| `get_crypto_order_book` | Best bid and ask, spread and the levels of the order book. |
+| `list_available_exchanges` | Lists the exchanges supported by `ccxt`. |
 
-Os parâmetros e formatos de retorno estão em [`skills/cripto/tools.py`](skills/cripto/tools.py).
+The parameters and return formats are documented in
+[`skills/cripto/tools.py`](skills/cripto/tools.py).
 
-## Autenticação
+## Authentication
 
-Igual ao `finbrain-server`: quando `FINBRAIN_AUTH_JWKS_URL` está definida, toda
-requisição ao endpoint `/mcp` precisa de um access token RS256 emitido pelo
-auth_service, no header `Authorization: Bearer <token>`. O token é verificado
-pelas chaves públicas do JWKS, com `iss`, `aud`, `typ=access` e expiração.
+Authentication works the same way as in `finbrain-server`. When
+`FINBRAIN_AUTH_JWKS_URL` is set, every request to the `/mcp` endpoint must
+include an RS256 access token issued by the auth_service, in the
+`Authorization: Bearer <token>` header. The token is checked against the public
+keys of the JWKS, including `iss`, `aud`, `typ=access` and its expiry.
 
-- Sem token ou com token inválido: `401` com `{"code", "message"}`.
-- auth_service inacessível: `503`.
-- `/health`, `/docs`, `/openapi.json` e `/redoc` não exigem token. `/tools` e `/mcp` exigem.
-- Sem `FINBRAIN_AUTH_JWKS_URL`, o endpoint fica aberto.
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as crypto MCP
+    participant A as auth_service
 
-Ver [`auth.py`](auth.py).
+    C->>S: POST /mcp (Authorization: Bearer token)
+    alt no JWKS configured
+        S-->>C: run the tool (endpoint open)
+    else JWKS configured
+        S->>A: fetch JWKS keys
+        alt auth_service unreachable
+            S-->>C: 503
+        else token missing or invalid
+            S-->>C: 401 {code, message}
+        else token valid
+            S-->>C: run the tool
+        end
+    end
+```
 
-## Documentação (Swagger)
+- No token, or an invalid token: `401` with `{"code", "message"}`.
+- auth_service unreachable: `503`.
+- `/health`, `/docs`, `/openapi.json` and `/redoc` do not require a token.
+  `/tools` and `/mcp` do.
+- Without `FINBRAIN_AUTH_JWKS_URL`, the endpoint is open.
 
-Abra `/docs` (Swagger UI) para ver, em inglês, a descrição do servidor, cada
-parâmetro da ferramenta com seus limites, a operação `/mcp` com exemplos
-JSON-RPC (`initialize`, `tools/list`, `tools/call`) e o catálogo JSON em `/tools`.
-Use o botão **Authorize** para informar o Bearer token quando a autenticação estiver ligada.
-O código fica em [`docs_api.py`](docs_api.py).
+See [`auth.py`](auth.py).
 
-## Variáveis de ambiente
+## API documentation (Swagger)
 
-Copie [`.env.example`](.env.example) para `.env`.
+Open `/docs` (Swagger UI) to see the server description, each tool parameter
+with its limits, the `/mcp` operation with JSON-RPC examples (`initialize`,
+`tools/list`, `tools/call`), and the JSON catalog at `/tools`. Use the
+**Authorize** button to enter the Bearer token when authentication is enabled.
+The code is in [`docs_api.py`](docs_api.py).
 
-| Variável | Obrigatória | Descrição |
+## Environment variables
+
+Copy [`.env.example`](.env.example) to `.env`.
+
+| Variable | Required | Description |
 |---|---|---|
-| `FINBRAIN_AUTH_JWKS_URL` | Não | JWKS do auth_service (ex.: `https://authservice-delta.vercel.app/.well-known/jwks.json`). Liga a autenticação. |
-| `FINBRAIN_AUTH_JWT_ISSUER` | Não | `iss` esperado (padrão `auth-service`). |
-| `FINBRAIN_AUTH_JWT_AUDIENCE` | Não | `aud` esperado (padrão `synapse-apps`). |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | Não | Tracing das chamadas das tools no Langfuse. |
+| `FINBRAIN_AUTH_JWKS_URL` | No | JWKS of the auth_service (for example `https://authservice-delta.vercel.app/.well-known/jwks.json`). Enables authentication. |
+| `FINBRAIN_AUTH_JWT_ISSUER` | No | Expected `iss` (default `auth-service`). |
+| `FINBRAIN_AUTH_JWT_AUDIENCE` | No | Expected `aud` (default `synapse-apps`). |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_HOST` | No | Tracing of tool calls in Langfuse. |
 
-As exchanges são acessadas sem chave de API: só dados públicos de mercado são lidos.
+Exchanges are accessed without API keys: only public market data is read.
 
-## Como executar
+## Running locally
 
-Com [uv](https://docs.astral.sh/uv/):
+With [uv](https://docs.astral.sh/uv/):
 
 ```bash
 uv run --no-project --with-requirements requirements.txt uvicorn mcp_server:app --port 8000
 ```
 
-Endpoint MCP: `POST http://localhost:8000/mcp` (Streamable HTTP, JSON-RPC).
+MCP endpoint: `POST http://localhost:8000/mcp` (Streamable HTTP, JSON-RPC).
 
-## Testes
+## Testing
 
 ```bash
 uv run --no-project --with-requirements requirements-dev.txt python -m pytest -q
 ```
 
-Os testes não fazem chamadas de rede: o `ccxt` é substituído por um módulo falso,
-e os tokens são assinados com uma chave de teste, com o JWKS também falso.
+The tests make no network calls: `ccxt` is replaced by a fake module, and
+tokens are signed with a test key, with a fake JWKS.
 
-## Deploy
+## Deployment
 
-`api/index.py` expõe `app` para o Vercel (`vercel.json`). Configure as variáveis
-de ambiente acima no projeto.
+`api/index.py` exposes `app` to Vercel (see `vercel.json`). Set the environment
+variables above in the Vercel project.
 
-**Efeito colateral:** cada chamada faz requisições às exchanges públicas, sujeitas
-aos limites de taxa de cada uma.
+```mermaid
+flowchart LR
+    push["git push to main"] --> vercel["Vercel build<br/>requirements.txt"]
+    vercel --> fn["Function api/index.py<br/>maxDuration 30 s"]
+    env["Vercel environment variables<br/>FINBRAIN_AUTH_*, LANGFUSE_*"] --> fn
+```
+
+**Side effect:** every call makes requests to public exchange APIs, which are
+subject to each exchange's rate limits.
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `mcp_server.py` | MCP server and tool registration |
+| `auth.py` | JWT verification with the auth_service JWKS |
+| `docs_api.py` | Swagger/OpenAPI documentation |
+| `skills/cripto/` | Crypto tools (`tools.py`) |
+| `api/index.py` | Vercel entry point |
+| `tests/` | Unit tests (no network) |
